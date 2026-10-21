@@ -121,7 +121,8 @@ export async function clearSessionCookie(): Promise<void> {
 export async function destroyCurrentSession(): Promise<void> {
   const store = cookies();
   const token = store.get(SESSION_COOKIE)?.value;
-  if (token) {
+  // Mode demo: sesi bersifat stateless (token = "tok_<userId>"), tanpa database.
+  if (token && !isDemoBuild()) {
     await prisma.session.deleteMany({ where: { id: hashToken(token) } });
   }
   await clearSessionCookie();

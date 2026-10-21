@@ -2,6 +2,9 @@ import { prisma } from '@/lib/db';
 import { ApiError, jsonError, jsonOk, readJson } from '@/lib/api';
 import { createSession, rateLimit, requestMeta, setSessionCookie, verifyPassword } from '@/lib/auth';
 import { loginSchema } from '@/lib/validation';
+import { isDemoBuild } from '@/lib/demo/constants';
+import { DEMO_SESSION_COOKIE, findDemoUserByEmail, demoTokenFor } from '@/lib/demo/dataset';
+import { cookies } from 'next/headers';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -15,6 +18,24 @@ export async function POST(request: Request) {
     // Batasi percobaan per IP dan per email.
     rateLimit(`login:${meta.ip ?? 'unknown'}`, 10, 5 * 60 * 1000);
     rateLimit(`login-email:${input.email}`, 6, 5 * 60 * 1000);
+
+    // ---- Mode demo: login tanpa database ----
+    if (isDemoBuild()) {
+      const demo = findDemoUserByEmail(input.email);
+      if (!demo || demo.passwordHash !== input.password) {
+        throw new ApiError(401, 'INVALID_CREDENTIALS', 'Email atau password salah.');
+      }
+      const token = demoTokenFor(demo.id);
+      cookies().set({
+        name: DEMO_SESSION_COOKIE,
+        value: token,
+        httpOnly: true,
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 60 * 60 * 24 * 30,
+      });
+      return jsonOk({ id: demo.id, name: demo.name, planId: demo.planId });
+    }
 
     const user = await prisma.user.findUnique({ where: { email: input.email } });
     if (!user) {

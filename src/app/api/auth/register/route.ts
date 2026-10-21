@@ -2,6 +2,7 @@ import { prisma } from '@/lib/db';
 import { ApiError, jsonCreated, jsonError, readJson } from '@/lib/api';
 import { createSession, hashPassword, rateLimit, requestMeta, setSessionCookie } from '@/lib/auth';
 import { registerSchema } from '@/lib/validation';
+import { isDemoBuild } from '@/lib/demo/constants';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -13,6 +14,15 @@ export async function POST(request: Request) {
 
     const meta = await requestMeta();
     rateLimit(`register:${meta.ip ?? 'unknown'}`, 10, 10 * 60 * 1000);
+
+    // ---- Mode demo: pendaftaran baru tidak tersedia (tanpa database) ----
+    if (isDemoBuild()) {
+      throw new ApiError(
+        409,
+        'DEMO_MODE',
+        'Mode demo tidak menyimpan akun baru. Silakan masuk memakai akun demo atau tombol "Masuk sebagai tamu".',
+      );
+    }
 
     const existing = await prisma.user.findUnique({ where: { email: input.email } });
     if (existing) {
