@@ -1,0 +1,250 @@
+// ============================================================
+// Subscriptly — skema untuk PRODUKSI (PostgreSQL / Supabase)
+//
+// Cara pakai:
+//   1. Salin file ini menjadi prisma/schema.prisma
+//      (atau ubah provider/url pada schema.prisma).
+//   2. Isi DATABASE_URL & DIRECT_URL di .env (lihat .env.example).
+//   3. npx prisma migrate deploy   (atau jalankan prisma/postgresql/init.sql di Supabase SQL Editor)
+//
+// Relasi, indeks, dan aturan validasi identik dengan versi SQLite.
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  timezone     String   @default("Asia/Jakarta")
+  locale       String   @default("id-ID")
+  avatarColor  String   @default("#6d28d9")
+
+  planId        String    @default("free")
+  planCycle     String    @default("monthly")
+  planStartedAt DateTime  @default(now())
+  planExpiresAt DateTime?
+  cancelAtPeriodEnd Boolean @default(false)
+  paymentStatus String    @default("none")
+  studentStatus String    @default("none")
+
+  isDemo    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscriptions        Subscription[]
+  payments             Payment[]
+  budget               Budget?
+  reminderSetting      ReminderSetting?
+  memberships          Membership[]
+  billingEvents        BillingEvent[]
+  studentVerifications StudentVerification[]
+  sessions             Session[]
+  categories           Category[]
+
+  @@index([planId])
+}
+
+model Category {
+  id        String   @id
+  userId    String?
+  name      String
+  emoji     String   @default("📦")
+  color     String   @default("#64748b")
+  isSystem  Boolean  @default(false)
+  sortOrder Int      @default(100)
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+model Plan {
+  id            String  @id
+  name          String
+  tagline       String
+  priceMonthly  Int
+  priceYearly   Int?
+  maxActiveSubs Int?
+  featuresJson  String
+  limitsJson    String
+  recommended   Boolean @default(false)
+  sortOrder     Int     @default(0)
+  isActive      Boolean @default(true)
+  updatedAt     DateTime @updatedAt
+
+  memberships Membership[]
+}
+
+model Membership {
+  id                String    @id @default(cuid())
+  userId            String
+  planId            String
+  status            String    @default("active")
+  cycle             String    @default("monthly")
+  pricePaid         Int       @default(0)
+  paymentStatus     String    @default("pending")
+  startedAt         DateTime  @default(now())
+  currentPeriodEnd  DateTime
+  cancelAtPeriodEnd Boolean   @default(false)
+  canceledAt        DateTime?
+  note              String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan Plan @relation(fields: [planId], references: [id])
+
+  @@index([userId, status])
+  @@index([userId, createdAt])
+}
+
+model Subscription {
+  id               String @id @default(cuid())
+  userId           String
+  name             String
+  category         String
+  provider         String?
+  price            Int
+  billingCycle     String
+  customPeriodDays Int?
+
+  startDate       DateTime
+  nextRenewalDate DateTime
+  status          String   @default("active")
+
+  isFreeTrial     Boolean   @default(false)
+  trialStartDate  DateTime?
+  trialEndDate    DateTime?
+  firstChargeDate DateTime?
+  priceAfterTrial Int?
+
+  reminderDaysBefore Int     @default(3)
+  reminderPriority   String  @default("normal")
+  lastPaidAt         DateTime?
+  paidThisCycle      Boolean @default(false)
+
+  usageFrequency String?
+  valueRating    Int?
+  benefitNotes   String?
+
+  notes     String?
+  isDemo    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payments Payment[]
+
+  @@index([userId, status])
+  @@index([userId, nextRenewalDate])
+  @@index([userId, category])
+  @@index([userId, isFreeTrial])
+}
+
+model Payment {
+  id             String   @id @default(cuid())
+  userId         String
+  subscriptionId String?
+  amount         Int
+  paidAt         DateTime
+  cycle          String?
+  method         String   @default("manual")
+  note           String?
+  isDemo         Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@index([userId, paidAt])
+  @@index([subscriptionId])
+}
+
+model Budget {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  monthlyLimit  Int
+  warnAtPercent Int      @default(80)
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ReminderSetting {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  defaultDaysBefore Int      @default(3)
+  inAppEnabled      Boolean  @default(true)
+  emailEnabled      Boolean  @default(false)
+  emailVerified     Boolean  @default(false)
+  updatedAt         DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model BillingEvent {
+  id          String   @id @default(cuid())
+  userId      String
+  type        String
+  planId      String?
+  cycle       String?
+  amount      Int      @default(0)
+  status      String   @default("pending")
+  provider    String   @default("mock")
+  providerRef String?
+  note        String?
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, type])
+}
+
+model StudentVerification {
+  id            String    @id @default(cuid())
+  userId        String
+  fullName      String
+  institution   String
+  studentNumber String
+  studentEmail  String?
+  note          String?
+  status        String    @default("pending")
+  reviewedAt    DateTime?
+  reviewNote    String?
+  method        String    @default("demo")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+}
+
+model Session {
+  id        String   @id
+  userId    String
+  expiresAt DateTime
+  userAgent String?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
