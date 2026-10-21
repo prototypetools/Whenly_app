@@ -12,14 +12,14 @@ import { DEMO_ACCOUNTS, DEMO_PASSWORD } from '@/lib/demo/constants';
 
 const DEMO_REDIRECT = '/dashboard';
 
-export function LoginForm() {
+export function LoginForm({ demoMode }: { demoMode: boolean }) {
   const router = useRouter();
   const toast = useToast();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const demoBuild = isDemoMode();
+  const demoBuild = demoMode;
 
   /**
    * Setelah sesi demo dibuat, cookie-nya hanya terkirim pada request

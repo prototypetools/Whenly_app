@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useState, type ReactNode } from 'react';
 import { useToast } from '@/components/ui/Toast';
 import { apiPost } from '@/lib/client';
-import { demoLogout, isDemoMode } from '@/lib/demo/client';
+import { demoLogout } from '@/lib/demo/client';
 import { cx } from '@/components/ui/primitives';
 
 export interface ShellUser {
@@ -30,13 +30,22 @@ interface NavItem {
   hint?: string;
 }
 
-export function AppShell({ user, children }: { user: ShellUser; children: ReactNode }) {
+export function AppShell({
+  user,
+  demoMode,
+  children,
+}: {
+  user: ShellUser;
+  /** Dikirim dari server (layout) agar render server & client selalu sama (hindari hydration mismatch). */
+  demoMode: boolean;
+  children: ReactNode;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const toast = useToast();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const demo = isDemoMode();
+  const demo = demoMode;
 
   const isPremiumFeature = user.planId === 'free';
 
@@ -63,7 +72,7 @@ export function AppShell({ user, children }: { user: ShellUser; children: ReactN
   async function logout() {
     setBusy(true);
     try {
-      if (isDemoMode()) {
+      if (demo) {
         await demoLogout();
       } else {
         await apiPost('/api/auth/logout');

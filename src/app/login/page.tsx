@@ -74,7 +74,7 @@ export default function LoginPage() {
                 ? 'Masuk cepat sebagai tamu, atau coba akun contoh lain di bawah.'
                 : 'Gunakan akunmu, atau pilih salah satu akun demo di bawah.'}
             </p>
-            <LoginForm />
+            <LoginForm demoMode={demoBuild} />
           </Card>
         </div>
       </div>

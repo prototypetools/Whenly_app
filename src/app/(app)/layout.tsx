@@ -3,6 +3,7 @@ import { requireUser } from '@/lib/auth';
 import { getEntitlements } from '@/lib/plans';
 import { formatDateID } from '@/lib/dates';
 import { isoOf } from '@/lib/subscriptions';
+import { isDemoBuild } from '@/lib/demo/constants';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,5 +30,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     planExpiresAt: user.planExpiresAt ? formatDateID(isoOf(user.planExpiresAt)) : null,
   };
 
-  return <AppShell user={shellUser}>{children}</AppShell>;
+  return (
+    <AppShell user={shellUser} demoMode={isDemoBuild()}>
+      {children}
+    </AppShell>
+  );
 }

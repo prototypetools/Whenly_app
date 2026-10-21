@@ -1,6 +1,6 @@
 'use client';
 
-import { loadDemo, saveDemo, clearSessionDemo } from './store';
+import { loadDemo, clearSessionDemo } from './store';
 
 /**
  * Helper demo sisi klien.
@@ -15,14 +15,17 @@ import { loadDemo, saveDemo, clearSessionDemo } from './store';
  */
 export const DEMO_SESSION_COOKIE = 'Whenly_session';
 
-const DEMO_ACCOUNTS: Record<string, string> = {
-  'demo@subscriptly.id': 'demo_premium',
-  'gratis@subscriptly.id': 'demo_free',
-  'pelajar@subscriptly.id': 'demo_student',
-};
-
-export function isDemoMode() {
-  return typeof window !== 'undefined' && process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+/**
+ * Apakah aplikasi berjalan pada mode demo.
+ *
+ * PENTING: fungsi ini dipakai juga saat render (server & client), jadi
+ * nilainya HARUS sama di keduanya. `NEXT_PUBLIC_*` di-inline oleh Next.js
+ * saat build, sehingga aman dibaca tanpa cek `window`. (Sebelumnya ada
+ * `typeof window !== 'undefined'` yang membuat server mengembalikan `false`
+ * sementara client `true` — penyebab hydration mismatch.)
+ */
+export function isDemoMode(): boolean {
+  return process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
 }
 
 function setSessionCookie(token: string) {
@@ -36,18 +39,31 @@ export function demoTokenUser(): string | null {
   return token.slice(4);
 }
 
+/**
+ * Masuk sebagai pengguna demo.
+ * Memakai endpoint server (`/api/auth/login`) supaya cookie sesi di-set oleh
+ * server (httpOnly) dan validasi berada di satu tempat.
+ */
 export async function demoLogin(email: string, password: string) {
-  const userId = DEMO_ACCOUNTS[email.toLowerCase()];
-  if (!userId || password !== 'demo12345') {
-    throw new Error('INVALID_CREDENTIALS');
+  const res = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  const json = (await res.json()) as {
+    ok: boolean;
+    data?: { id: string; name: string; planId: string };
+    error?: { code?: string; message?: string };
+  };
+  if (!res.ok || !json.ok) {
+    throw new Error(json.error?.code ?? 'INVALID_CREDENTIALS');
   }
-  setSessionCookie(`tok_${userId}`);
-  // Selaraskan store localStorage (dipakai istilah user di beberapa tempat).
-  const d = loadDemo();
-  d.sessions = d.sessions.filter((s) => s.userId !== userId);
-  d.sessions.push({ id: `tok_${userId}`, userId, expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(), createdAt: new Date().toISOString() });
-  saveDemo(d);
-  return { ok: true, user: d.users.find((u) => u.id === userId) ?? null };
+  // Cookie httpOnly sudah di-set server. Simpan penanda di localStorage untuk
+  // kebutuhan tampilan sisi klien (opsional, tidak dipakai untuk otorisasi).
+  if (json.data) {
+    setSessionCookie(`tok_${json.data.id}`);
+  }
+  return { ok: true, user: json.data ?? null };
 }
 
 export async function demoLogout() {
