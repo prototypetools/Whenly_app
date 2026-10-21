@@ -2,16 +2,35 @@
 
 Whenly adalah aplikasi full-stack untuk mengelola langganan digital, dirancang khusus untuk pelajar & mahasiswa Indonesia. Fokusnya: bersih, responsif, jujur tentang batasan (terutama alur billing dan verifikasi pelajar), dan **seluruh batas paket ditegakkan di sisi server**.
 
+> Repo: https://github.com/prototypetools/Whenly_app
+
 ## Highlights
 
-- **UI Indonesia**: bahasa, tanggal (YYYY-MM-DD + `formatDateID`), dan mata uang IDR (Rp).
-- **Waktu & perhitungan**: zona waktu Asia/Jakarta; validasi kalender (termasuk akhir bulan/leap years); biaya dihitung secara ketat dengan estimasi (`estimate`).
-- **Paket & batasan server-side**: Free (maks 5 langganan aktif), Premium (unlimited fair-use soft cap 500), Student (dengan status verifikasi demo). Semua pengecekan dilakukan di server routes.
-- **Billing sandbox**: tidak ada gateway nyata; `BILLING_PROVIDER=mock` menandai semua aktivitas sebagai demo dan aplikasi menolak menjalankan checkout dengan provider nyata yang belum dikonfigurasi (501).
+- **UI Indonesia**: bahasa, tanggal (`formatDateID`), dan mata uang IDR (Rp).
+- **Waktu & perhitungan**: zona waktu Asia/Jakarta; validasi kalender (termasuk akhir bulan/leap years).
+- **Paket & batasan server-side**: Free (maks 5 langganan aktif), Premium (unlimited fair-use soft cap 500), Student (dengan status verifikasi demo).
+- **Billing sandbox**: tidak ada gateway nyata; `BILLING_PROVIDER=mock` menandai semua aktivitas sebagai demo dan aplikasi menolak checkout dengan provider nyata yang belum dikonfigurasi (501).
 - **Verifikasi pelajar demo**: pengajuan `pending` → `approved/rejected` via tombol demo; **tidak klaim verifikasi resmi**.
 - **Analitik nyata**: proyeksi berdasarkan jadwal langganan + riwayat pembayaran nyata; value checker memberi saran, tidak auto-membatalkan.
-- **Reminders in-app**: hari ini/3/7/30 hari; email dinyatakan **disabled by technical constraint** (belum terhubung ke scheduler/pengirim).
-- **Trial tracker**: countdown, tanggal tagihan pertama, peringatan habis; tidak menjanjikan auto-cancel tanpa integrasi.
+- **Reminders in-app**: hari ini/3/7/30 hari; email dinyatakan **disabled by technical constraint**.
+- **Trial tracker**: countdown, tanggal tagihan pertama, peringatan habis.
+
+## Dua Mode Operasi
+
+Aplikasi ini bisa berjalan dalam dua mode:
+
+| Mode | `NEXT_PUBLIC_DEMO_MODE` | Butuh database? | Keterangan |
+|---|---|---|---|
+| **Demo** | `true` | ❌ Tidak | Data demo disimpan di **memori proses server**. Cocok untuk preview/pameran tanpa setup database. |
+| **Produksi** | `false` | ✅ Ya | Memakai Prisma + PostgreSQL (mis. Neon/Supabase). Fitur penuh & persisten. |
+
+### Mode Demo
+
+Saat `NEXT_PUBLIC_DEMO_MODE=true`:
+
+- Tidak ada query Prisma sama sekali. Semua data dibaca/ditulis dari penyimpanan demo di server (`src/lib/demo/dataset.ts`) melalui endpoint `/api/demo/op`.
+- Tersedia 1 tombol masuk cepat: **“Masuk sebagai tamu”** di `/login` (langsung masuk sebagai akun Premium berisi data contoh).
+- Data demo **tidak persisten**: akan kembali ke kondisi awal saat proses server di-restart (Vercel serverless bisa me-reset kapan saja). Ini disengaja untuk demo.
 
 ## Tech Stack
 
@@ -21,111 +40,117 @@ Whenly adalah aplikasi full-stack untuk mengelola langganan digital, dirancang k
 - **DB ORM**: Prisma 5.22.0
 - **Auth**: email + password (bcryptjs), token acak (SHA-256 disimpan), cookie httpOnly (30 hari), in-memory rate limiting
 - **Validation**: zod 3.23.8
-- **Data**: SQLite (dev) / PostgreSQL (prod-ready)
+- **Data**: tanpa DB (mode demo) / SQLite (dev) / PostgreSQL (prod)
 
-## Quick Start (Portable Node v24)
-
-Proyek ini dikembangkan dengan Node v24.20.0 + npm 11.19.0. Jika menggunakan portable Node, prepend PATH terlebih dahulu.
+## Quick Start
 
 ```powershell
-# PowerShell (Windows)
-$env:PATH = "C:\Users\user\AppData\Local\Temp\opencode\node-v24.20.0-win-x64;" + $env:PATH
-
-cd "C:\Users\user\Documents\Default Project\Whenly"
-
-# 1. Install (npm 11 blocks scripts — approved)
+# 1. Install dependency
 npm install
 
-# 2. Setup (generate + migrate + seed)
-npm run setup
+# 2a. Mode demo (tanpa database — paling cepat)
+#     Pastikan NEXT_PUBLIC_DEMO_MODE=true di .env, lalu:
+npm run dev
 
-# 3. Run dev server
+# 2b. Mode produksi dengan database lokal (SQLite)
+npm run setup   # prisma generate + migrate + seed
 npm run dev
 ```
 
 Buka: [http://localhost:3000](http://localhost:3000)
 
-## Demo Accounts
+## Akun Demo
 
-| Email | Password | Keterangan |
+Tersedia di halaman `/login`. Password semua akun demo: `demo12345`.
+
+| Email | Paket | Keterangan |
 |---|---|---|
-| demo@Whenly.id | demo12345 | Premium. Data lengkap (12 langganan, trial, budget Rp500.000, kategori kustom). |
-| gratis@Whenly.id | demo12345 | Free. Persis 5 langganan aktif (kuota penuh). |
-| pelajar@Whenly.id | demo12345 | Free. Verifikasi pelajar berstatus `pending` (demo), 3 langganan termasuk trial. |
+| `demo@subscriptly.id` | Premium | Data lengkap (beberapa langganan, trial, budget, kategori kustom). |
+| `gratis@subscriptly.id` | Free | Mendekati batas kuota paket Free. |
+| `pelajar@subscriptly.id` | Free | Verifikasi pelajar berstatus `pending` (demo). |
 
-> Semua akun demo memiliki `isDemo=true` dan data dapat dimodifikasi; gunakan `npm run db:seed` untuk reset ke kondisi awal.
+> Di mode demo, tombol **“Masuk sebagai tamu”** langsung memakai akun Premium.
 
 ## Scripts
 
 | Script | Keterangan |
 |---|---|
-| `npm run dev` | Next.js dev server (Turbopack tidak dipakai di 14.2.35) |
-| `npm run build` | Build produksi (linting dilewati) |
+| `npm run dev` | Next.js dev server |
+| `npm run build` | Build produksi |
 | `npm run start` | Start server produksi |
-| `npm run typecheck` | Type check murni (`tsc --noEmit`) |
-| `npm run lint` | Lint (tersedia tapi belum dikonfigurasi penuh) |
-| `npm run db:seed` | Seed demo data |
-| `npm run db:reset` | Reset & reseed |
-| `npm run setup` | `prisma generate` + `prisma migrate deploy` + `npm run db:seed` |
-| `npm run test` | Smoke test (cek berkas penting) |
+| `npm run lint` | Lint |
+| `npm run setup` | (Mode produksi) `prisma generate` + migrate + seed |
+| `npm run db:seed` | Seed data demo ke database |
+| `npm run db:reset` | Reset & reseed database |
 
 ## Environment
 
-Salin `.env.example` ke `.env` (sudah ada `.env` untuk dev lokal). Konfigurasi utama:
+Salin `.env.example` menjadi `.env`. Lihat penjelasan lengkap di dalam file tersebut. Ringkasan:
 
 ```env
+# true = tanpa database (memori server); false = pakai Prisma
+NEXT_PUBLIC_DEMO_MODE=true
+
+# Wajib hanya bila NEXT_PUBLIC_DEMO_MODE=false
 DATABASE_URL="file:./dev.db"
-APP_URL="http://localhost:3000"
-TIMEZONE="Asia/Jakarta"
-CURRENCY="IDR"
-SESSION_COOKIE_NAME="Whenly_session"
-SESSION_TTL_DAYS="30"
-SEED_DEMO_DATA="true"
-BILLING_PROVIDER="mock"
-STUDENT_VERIFICATION_PROVIDER="demo"
+
+SESSION_COOKIE_NAME=Whenly_session
+SESSION_TTL_DAYS=30
+NEXT_PUBLIC_APP_NAME=Whenly
+TIMEZONE=Asia/Jakarta
+BILLING_PROVIDER=mock
 ```
 
-- **BILLING_PROVIDER=mock**: sandbox. Jika diubah ke provider nyata tanpa konfigurasi, API akan menolak dengan `501` (tidak pernah menampilkan "pembayaran berhasil" palsu).
-- **STUDENT_VERIFICATION_PROVIDER=demo**: alur demo. Di produksi, gunakan mekanisme terotentikasi (admin role / webhook signed).
+> **Penting:** `NEXT_PUBLIC_*` di-inline saat **build**. Jika mengubah nilainya, lakukan build/deploy ulang (push ke Vercel akan otomatis rebuild).
+
+## Deploy ke Vercel
+
+1. Import repo ini di Vercel (New Project → pilih `Whenly_app`).
+2. **Root Directory**: biarkan default (`.`) karena `package.json` ada di root repo ini.
+3. Tambahkan Environment Variable (Production & Preview):
+   - `NEXT_PUBLIC_DEMO_MODE=true` (untuk demo tanpa database), atau
+   - `NEXT_PUBLIC_DEMO_MODE=false` + `DATABASE_URL=<PostgreSQL>` (untuk produksi).
+4. Deploy. `postinstall` menjalankan `prisma generate`; bila mode demo tanpa database pun ini aman karena schema tersedia di repo.
+5. Setelah deploy, uji: buka `/`, klik **Masuk** → **Masuk sebagai tamu** → pastikan `/dashboard` terbuka.
+
+### Catatan mode produksi (butuh database)
+
+1. Siapkan PostgreSQL (Neon/Supabase) dan set `DATABASE_URL`.
+2. Jalankan migrasi: `npx prisma migrate deploy` (gunakan `prisma/schema.postgresql.prisma` bila provider produksi adalah PostgreSQL — lihat bagian di bawah).
+3. Seed (opsional): `npm run db:seed`.
 
 ## Struktur Kunci
 
-- `src/config/plans.ts` — satu sumber kebenaran (harga, batas, fitur, comparison). Dibaca server.
-- `src/lib/plans.ts` — `getEntitlements`, `assertQuota`, `assertFeature`, enforcement server-side.
-- `src/lib/billing.ts` — alur checkout/confirm, downgrade, overview. Selalu tandai demo/sandbox.
-- `src/lib/analytics.ts` — bangun ringkasan analitik dari data nyata.
-- `src/lib/subscriptions.ts` — kalkulasi siklus, renewal item, `monthlyEquivalent`/`yearlyEquivalent`, `effectivePrice`, `occurrencesInWindow`.
-- `src/components/billing/PlanSelector.tsx` — pemilih paket + modal checkout (sandbox) + downgrade.
-- `src/components/renewals/RenewalCalendar.tsx` — kalender 3 bulan (local grid), mark paid in-app.
-- `src/components/analytics/ValueChecker.tsx` — flag nilai tapi tidak auto-cancel.
-- `prisma/` — schema SQLite + postgresql variant + migrasi + seed.
+- `src/config/plans.ts` — satu sumber kebenaran (harga, batas, fitur). Dibaca server.
+- `src/lib/plans.ts` — `getEntitlements`, `assertCanConsumeSlot`, `assertFeature`, enforcement server-side.
+- `src/lib/billing.ts` — alur checkout/confirm, downgrade, overview. Selalu menandai demo/sandbox.
+- `src/lib/analytics.ts` — ringkasan analitik dari data nyata.
+- `src/lib/subscriptions.ts` — kalkulasi siklus, renewal item, `monthlyEquivalent`/`yearlyEquivalent`.
+- `src/lib/demo/` — dukungan mode demo:
+  - `constants.ts` — konstanta aman untuk server & client (`isDemoBuild`, `DEMO_*`).
+  - `dataset.ts` — penyimpanan demo di memori server.
+  - `client.ts` — helper sisi klien (`demoOp`, sesi demo).
+  - `bootstrap.tsx` — pembuat sesi demo.
+- `src/app/api/demo/op/route.ts` — endpoint mutasi mode demo.
+- `prisma/` — schema SQLite + varian PostgreSQL + migrasi + seed.
 
-## Transisi ke PostgreSQL (Supabase)
+## Transisi ke PostgreSQL (Neon/Supabase)
 
-1. Copy `prisma/schema.postgresql.prisma` ke `prisma/schema.prisma` (atau sesuaikan provider).
-2. Atur `DATABASE_URL` & `DIRECT_URL` di `.env` sesuai Supabase (pooling + direct).
-3. Jalankan migrasi: `npx prisma migrate deploy` / `prisma db push` sesuai workflow.
-4. Seed: `npm run db:seed` (dengan `SEED_DEMO_DATA=true`).
+1. Salin `prisma/schema.postgresql.prisma` menjadi `prisma/schema.prisma` (atau sesuaikan `provider`).
+2. Atur `DATABASE_URL` sesuai provider.
+3. Jalankan `npx prisma migrate deploy` / `prisma db push`.
+4. Seed: `npm run db:seed`.
 
-Lihat `prisma/postgresql/init.sql` untuk referensi DDL jika migrasi gagal.
+Lihat `prisma/postgresql/init.sql` untuk referensi DDL bila migrasi gagal.
 
 ## Batasan Prototype (Jujur)
 
 - **Pembayaran nyata**: belum terintegrasi. Status pembayaran selalu `demo` di sandbox.
-- **Email/push**: pengingat hanya **in-app**. Tidak ada koneksi ke SMTP/provider push, sehingga fitur email dinyatakan non-aktif.
+- **Email/push**: pengingat hanya **in-app**; belum ada koneksi SMTP/provider push.
 - **Verifikasi pelajar**: hanya simulasi demo (tidak menghubungi PDDikti/dll).
-- **Auto-cancel**: tidak ada (meski trial muncul); perilaku "batal otomatis" hanya bisa dijanjikan setelah integrasi dengan payment gateway + scheduler.
-- **Fair use**: Premium ditulis "tanpa batas" namun memiliki batas lunak **500** (ditampilkan & ditegakkan).
-- **Upload berkas**: tidak ada upload/attachment; hanya data teks.
-
-## Testing yang Sudah Dilakukan
-
-- `npm run typecheck` → sukses
-- `npm run build` → sukses (16 halaman)
-- Login/logout + semua 3 akun demo
-- Dashboard Premium menampilkan data lengkap
-- Akses fitur terkunci untuk Free (UI + server enforcement terverifikasi)
-- Subscriptions CRUD, mark-paid, extend (UI terhubung ke API)
+- **Auto-cancel**: tidak ada.
+- **Fair use**: Premium ditulis "tanpa batas" namun memiliki batas lunak **500**.
+- **Persistensi demo**: pada mode demo, data dapat hilang saat proses server di-restart.
 
 ## Lisensi
 
