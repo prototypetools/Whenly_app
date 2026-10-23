@@ -351,8 +351,8 @@ export function SubscriptionsClient({
                 <tr>
                   <th scope="col">Layanan</th>
                   <th scope="col">Kategori</th>
-                  <th scope="col">Harga</th>
-                  <th scope="col">Estimasi bulanan</th>
+                  <th scope="col">Harga asli</th>
+                  <th scope="col">Setara per bulan / per tahun</th>
                   <th scope="col">Renewal berikutnya</th>
                   <th scope="col">Status</th>
                   <th scope="col" className="text-right">
@@ -410,10 +410,10 @@ export function SubscriptionsClient({
                           </div>
                         )}
                       </td>
-                      <td className="tnum whitespace-nowrap font-semibold text-brand-ink">
-                        {formatIDR(monthlyEquivalent(sub))}
-                        <span className="block text-xs font-normal text-brand-muted">
-                          {formatIDR(yearlyEquivalent(sub))}/tahun
+                      <td className="tnum whitespace-nowrap">
+                        <span className="font-semibold text-brand-ink">{formatIDR(Math.round(monthlyEquivalent(sub)))} / bln</span>
+                        <span className="block text-xs text-brand-muted">
+                          Setara {formatIDR(Math.round(yearlyEquivalent(sub)))} / tahun
                         </span>
                       </td>
                       <td className="whitespace-nowrap">

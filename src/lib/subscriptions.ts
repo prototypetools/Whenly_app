@@ -52,7 +52,7 @@ export interface SubscriptionLike {
   isDemo?: boolean;
 }
 
-const DAYS_PER_YEAR = 365.2425; // rata-rata panjang tahun Gregorian (kabisat dihitung rata-rata)
+export const DAYS_PER_YEAR = 365.2425; // rata-rata panjang tahun Gregorian (kabisat dihitung rata-rata)
 
 export function normalizePeriodDays(cycle: string, customPeriodDays?: number | null): number {
   switch (cycle) {

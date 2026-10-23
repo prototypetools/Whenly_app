@@ -1,10 +1,13 @@
 // ============================================================
-// Subscriptly — skema database
-// Provider: SQLite (mode lokal/demo agar langsung jalan tanpa server DB).
-// Untuk produksi (Supabase/PostgreSQL) lihat:
-//   prisma/schema.postgresql.prisma  +  prisma/postgresql/init.sql
-// Nilai kolom String yang berperan sebagai enum didokumentasikan inline,
-// karena SQLite tidak mendukung tipe enum native.
+// Subscriptly — skema untuk PRODUKSI (PostgreSQL / Supabase)
+//
+// Cara pakai:
+//   1. Salin file ini menjadi prisma/schema.prisma
+//      (atau ubah provider/url pada schema.prisma).
+//   2. Isi DATABASE_URL & DIRECT_URL di .env (lihat .env.example).
+//   3. npx prisma migrate deploy   (atau jalankan prisma/postgresql/init.sql di Supabase SQL Editor)
+//
+// Relasi, indeks, dan aturan validasi identik dengan versi SQLite.
 // ============================================================
 
 generator client {
@@ -12,11 +15,11 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
-/// Akun pengguna aplikasi.
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -26,38 +29,33 @@ model User {
   locale       String   @default("id-ID")
   avatarColor  String   @default("#6d28d9")
 
-  // Paket aktif pada akun. Sumber kebenaran kuota ada di server (lib/plans.ts).
-  planId        String    @default("free") // free | premium | student
-  planCycle     String    @default("monthly") // monthly | yearly
+  planId        String    @default("free")
+  planCycle     String    @default("monthly")
   planStartedAt DateTime  @default(now())
   planExpiresAt DateTime?
   cancelAtPeriodEnd Boolean @default(false)
-  paymentStatus String    @default("none") // none | pending | paid | failed | refunded
-  studentStatus String    @default("none") // none | pending | approved | rejected
+  paymentStatus String    @default("none")
+  studentStatus String    @default("none")
 
   isDemo    Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  subscriptions    Subscription[]
-  payments         Payment[]
-  budget           Budget?
-  reminderSetting  ReminderSetting?
-  memberships      Membership[]
-  billingEvents    BillingEvent[]
+  subscriptions        Subscription[]
+  payments             Payment[]
+  budget               Budget?
+  reminderSetting      ReminderSetting?
+  memberships          Membership[]
+  billingEvents        BillingEvent[]
   studentVerifications StudentVerification[]
-  sessions         Session[]
-  categories       Category[]
+  sessions             Session[]
+  categories           Category[]
 
   @@index([planId])
-  @@index([email])
 }
 
-/// Kategori pengeluaran. `isSystem = true` & `userId = NULL` berarti kategori
-/// bawaan yang tersedia untuk semua pengguna. Kategori kustom (fitur Premium)
-/// memiliki `userId` dan hanya terlihat oleh pemiliknya.
 model Category {
-  id        String   @id // slug: 'hiburan', 'kursus-online', ...
+  id        String   @id
   userId    String?
   name      String
   emoji     String   @default("📦")
@@ -72,41 +70,38 @@ model Category {
   @@index([userId])
 }
 
-/// Katalog paket. Harga & benefit dikonfigurasi di src/config/plans.ts
-/// lalu di-seed ke tabel ini (satu sumber konfigurasi, DB sebagai runtime source).
 model Plan {
-  id          String  @id // free | premium | student
-  name        String
-  tagline     String
-  priceMonthly Int    // Rupiah penuh (tanpa desimal), 0 = gratis
-  priceYearly  Int?   // Rupiah penuh untuk 1 tahun
-  maxActiveSubs Int?  // NULL = tanpa batas wajar (fair use)
-  featuresJson String // JSON string: { key, label, included }[]
-  limitsJson   String // JSON string: { csvExport, advancedAnalytics, budgetPlanner, customCategories, history }
-  recommended Boolean @default(false)
-  sortOrder   Int     @default(0)
-  isActive    Boolean @default(true)
-  updatedAt   DateTime @updatedAt
+  id            String  @id
+  name          String
+  tagline       String
+  priceMonthly  Int
+  priceYearly   Int?
+  maxActiveSubs Int?
+  featuresJson  String
+  limitsJson    String
+  recommended   Boolean @default(false)
+  sortOrder     Int     @default(0)
+  isActive      Boolean @default(true)
+  updatedAt     DateTime @updatedAt
 
   memberships Membership[]
 }
 
-/// Riwayat keanggotaan/berlangganan paket (untuk upgrade, downgrade, pembatalan).
 model Membership {
-  id             String    @id @default(cuid())
-  userId         String
-  planId         String
-  status         String    @default("active") // active | scheduled | canceled | expired
-  cycle          String    @default("monthly") // monthly | yearly
-  pricePaid      Int       @default(0)
-  paymentStatus  String    @default("pending") // pending | paid | failed | refunded | demo
-  startedAt      DateTime  @default(now())
-  currentPeriodEnd DateTime
-  cancelAtPeriodEnd Boolean @default(false)
-  canceledAt     DateTime?
-  note           String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id                String    @id @default(cuid())
+  userId            String
+  planId            String
+  status            String    @default("active")
+  cycle             String    @default("monthly")
+  pricePaid         Int       @default(0)
+  paymentStatus     String    @default("pending")
+  startedAt         DateTime  @default(now())
+  currentPeriodEnd  DateTime
+  cancelAtPeriodEnd Boolean   @default(false)
+  canceledAt        DateTime?
+  note              String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   plan Plan @relation(fields: [planId], references: [id])
@@ -115,38 +110,33 @@ model Membership {
   @@index([userId, createdAt])
 }
 
-/// Subscription digital milik pengguna.
 model Subscription {
-  id       String @id @default(cuid())
-  userId   String
-  name     String
-  category String // hiburan | produktivitas | cloud | pendidikan | gaya | lainnya
-  provider String? // nama penyedia opsional (Netflix, Spotify, dst.)
-
-  price        Int    // harga per siklus, Rupiah penuh
-  billingCycle String // weekly | monthly | yearly | custom
-  customPeriodDays Int? // wajib bila billingCycle = custom
+  id               String @id @default(cuid())
+  userId           String
+  name             String
+  category         String
+  provider         String?
+  price            Int
+  billingCycle     String
+  customPeriodDays Int?
 
   startDate       DateTime
   nextRenewalDate DateTime
-  status          String   @default("active") // active | paused | canceled | expired
+  status          String   @default("active")
 
-  // Free trial
-  isFreeTrial      Boolean   @default(false)
-  trialStartDate   DateTime?
-  trialEndDate     DateTime?
-  firstChargeDate  DateTime? // estimasi tanggal tagihan pertama setelah trial
-  priceAfterTrial  Int?
+  isFreeTrial     Boolean   @default(false)
+  trialStartDate  DateTime?
+  trialEndDate    DateTime?
+  firstChargeDate DateTime?
+  priceAfterTrial Int?
 
-  // Reminder
   reminderDaysBefore Int     @default(3)
-  reminderPriority   String  @default("normal") // low | normal | high
+  reminderPriority   String  @default("normal")
   lastPaidAt         DateTime?
   paidThisCycle      Boolean @default(false)
 
-  // Value checker
-  usageFrequency String? // daily | weekly | monthly | rarely | never
-  valueRating    Int?    // 1..5
+  usageFrequency String?
+  valueRating    Int?
   benefitNotes   String?
 
   notes     String?
@@ -163,15 +153,14 @@ model Subscription {
   @@index([userId, isFreeTrial])
 }
 
-/// Pembayaran yang sudah ditandai lunas (dipakai analitik riwayat nyata).
 model Payment {
   id             String   @id @default(cuid())
   userId         String
   subscriptionId String?
   amount         Int
   paidAt         DateTime
-  cycle          String? // weekly | monthly | yearly | custom
-  method         String   @default("manual") // manual | mock_gateway
+  cycle          String?
+  method         String   @default("manual")
   note           String?
   isDemo         Boolean  @default(false)
   createdAt      DateTime @default(now())
@@ -183,7 +172,6 @@ model Payment {
   @@index([subscriptionId])
 }
 
-/// Anggaran bulanan pengguna (fitur paket Premium/Student).
 model Budget {
   id            String   @id @default(cuid())
   userId        String   @unique
@@ -196,30 +184,27 @@ model Budget {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-/// Pengaturan pengingat pengguna (in-app).
 model ReminderSetting {
-  id               String   @id @default(cuid())
-  userId           String   @unique
-  defaultDaysBefore Int     @default(3)
-  inAppEnabled     Boolean  @default(true)
-  emailEnabled     Boolean  @default(false) // belum berfungsi: butuh provider email
-  emailVerified    Boolean  @default(false)
-  updatedAt        DateTime @updatedAt
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  defaultDaysBefore Int      @default(3)
+  inAppEnabled      Boolean  @default(true)
+  emailEnabled      Boolean  @default(false)
+  emailVerified     Boolean  @default(false)
+  updatedAt         DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-/// Peristiwa billing (perubahan paket, pembayaran, pembatalan).
-/// Tidak menyimpan data instrumen pembayaran apa pun.
 model BillingEvent {
   id          String   @id @default(cuid())
   userId      String
-  type        String // plan_selected | plan_activated | plan_changed | payment_demo | renewal_canceled | renewal_resumed | plan_expired
+  type        String
   planId      String?
   cycle       String?
   amount      Int      @default(0)
-  status      String   @default("pending") // pending | succeeded | failed | demo
-  provider    String   @default("mock") // mock = sandbox internal
+  status      String   @default("pending")
+  provider    String   @default("mock")
   providerRef String?
   note        String?
   createdAt   DateTime @default(now())
@@ -230,30 +215,28 @@ model BillingEvent {
   @@index([userId, type])
 }
 
-/// Pengajuan verifikasi status pelajar/mahasiswa.
 model StudentVerification {
-  id           String   @id @default(cuid())
-  userId       String
-  fullName     String
-  institution  String
+  id            String    @id @default(cuid())
+  userId        String
+  fullName      String
+  institution   String
   studentNumber String
-  studentEmail String?
-  note         String?
-  status       String   @default("pending") // pending | approved | rejected
-  reviewedAt   DateTime?
-  reviewNote   String?
-  method       String   @default("demo") // demo (belum ada provider pihak ketiga)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  studentEmail  String?
+  note          String?
+  status        String    @default("pending")
+  reviewedAt    DateTime?
+  reviewNote    String?
+  method        String    @default("demo")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, status])
 }
 
-/// Sesi login (token disimpan sebagai hash SHA-256, bukan token mentah).
 model Session {
-  id        String   @id // sha256(token)
+  id        String   @id
   userId    String
   expiresAt DateTime
   userAgent String?
