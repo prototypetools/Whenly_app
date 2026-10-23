@@ -50,6 +50,7 @@ model User {
   studentVerifications StudentVerification[]
   sessions             Session[]
   categories           Category[]
+  reminderLogs         ReminderLog[]
 
   @@index([planId])
 }
@@ -146,6 +147,7 @@ model Subscription {
 
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   payments Payment[]
+  reminderLogs ReminderLog[]
 
   @@index([userId, status])
   @@index([userId, nextRenewalDate])
@@ -248,3 +250,33 @@ model Session {
   @@index([userId])
   @@index([expiresAt])
 }
+
+// Riwayat pengingat yang sudah diproses (email/in-app).
+//
+// Tujuannya mencegah pengingat yang sama terkirim berulang kali:
+// satu baris = satu kombinasi unik (langganan + jenis + tanggal jatuh tempo
+// + jumlah hari sebelum). Cron cukup mengecek apakah baris serupa sudah ada.
+model ReminderLog {
+  id               String    @id @default(cuid())
+  userId           String
+  subscriptionId   String?
+  subscriptionName String?
+  channel          String    @default("email")
+  kind             String    @default("due") // due | trial | test
+  dueDate          DateTime?
+  daysBefore       Int?
+  status           String    @default("pending") // sent | skipped | failed
+  provider         String?   @default("resend")
+  providerRef      String?
+  toEmail          String?
+  error            String?
+  createdAt        DateTime  @default(now())
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([subscriptionId, kind, dueDate, daysBefore])
+  @@index([status, createdAt])
+}
+

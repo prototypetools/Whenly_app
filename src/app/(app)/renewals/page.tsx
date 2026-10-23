@@ -1,18 +1,19 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import { requireUser } from '@/lib/auth';
-import { getCustomCategories, getReminderSettings, getUserPayments, getUserSubscriptions } from '@/lib/queries';
+import { getCustomCategories, getRecentReminderLogs, getReminderSettings, getUserPayments, getUserSubscriptions } from '@/lib/queries';
 import { buildAnalytics } from '@/lib/analytics';
 import { getEntitlements } from '@/lib/plans';
 import { getPlanLimits } from '@/config/plans';
 import { categoryById, resolveCategories } from '@/lib/categories';
-import { addMonthsClamped, countdownLabel, formatDateID, monthKeyFromDate, todayISO } from '@/lib/dates';
+import { addMonthsClamped, countdownLabel, formatDateID, formatDateTimeID, monthKeyFromDate, todayISO } from '@/lib/dates';
 import { cycleLabel, isoOf, occurrencesInWindow, renewalItem } from '@/lib/subscriptions';
 import { formatIDR } from '@/lib/money';
 import { Badge, Card, CardHeader, EmptyState, InfoBanner, PageHeader, StatCard } from '@/components/ui/primitives';
 import { MarkPaidButton } from '@/components/subscriptions/SubscriptionActions';
 import { RenewalCalendar, type CalendarCharge } from '@/components/renewals/RenewalCalendar';
 import { ReminderSettingsForm } from '@/components/forms/ReminderSettingsForm';
+import { isEmailConfigured } from '@/lib/email';
 
 export const metadata: Metadata = { title: 'Renewal & Reminder' };
 export const dynamic = 'force-dynamic';
@@ -33,6 +34,7 @@ export default async function RenewalsPage() {
     getCustomCategories(user.id),
     getReminderSettings(user.id),
   ]);
+  const reminderLogs = await getRecentReminderLogs(user.id);
 
   const entitlements = await getEntitlements(user.id, user.planId, {
     planExpiresAt: user.planExpiresAt,
@@ -203,7 +205,53 @@ export default async function RenewalsPage() {
           emailEnabled: reminder.emailEnabled,
         }}
         isPremiumPlan={limits.advancedReminders}
+        emailConfigured={isEmailConfigured()}
       />
+
+      <Card>
+        <CardHeader
+          title="Riwayat pengingat email"
+          subtitle="Catatan pengingat yang sudah diproses server. Satu tagihan hanya dikirimi satu email per ambang, jadi tidak akan dobel."
+        />
+        {reminderLogs.length ? (
+          <ul className="divide-y divide-brand-line">
+            {reminderLogs.map((log) => {
+              const statusMeta =
+                log.status === 'sent'
+                  ? { label: 'Terkirim', tone: 'green' as const }
+                  : log.status === 'failed'
+                    ? { label: 'Gagal', tone: 'red' as const }
+                    : { label: 'Dilewati', tone: 'amber' as const };
+              const kindLabel =
+                log.kind === 'test' ? 'Email uji' : log.kind === 'trial' ? 'Akhir trial' : 'Jatuh tempo';
+              return (
+                <li key={log.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold text-brand-ink">
+                        {log.subscriptionName || 'Pengingat'}
+                      </span>
+                      <Badge tone={statusMeta.tone}>{statusMeta.label}</Badge>
+                      <Badge tone="slate">{kindLabel}</Badge>
+                    </div>
+                    <p className="mt-0.5 text-xs text-brand-muted">
+                      {formatDateTimeID(log.createdAt)} · ke {log.toEmail || '—'}
+                      {log.daysBefore !== null ? ` · H-${log.daysBefore}` : ''}
+                    </p>
+                    {log.error ? <p className="mt-0.5 text-xs text-amber-700">{log.error}</p> : null}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <EmptyState
+            emoji="📭"
+            title="Belum ada pengingat yang diproses"
+            description="Pengingat akan muncul di sini setelah cron harian berjalan, atau setelah kamu mengirim email uji."
+          />
+        )}
+      </Card>
 
       <Card>
         <CardHeader

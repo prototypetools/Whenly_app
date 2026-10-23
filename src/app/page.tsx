@@ -141,7 +141,8 @@ export default async function LandingPage() {
                 pembayaran akan menandai transaksi sebagai <em>demo</em>, tidak pernah sebagai pembayaran nyata.
               </li>
               <li>
-                <strong>Pengingat hanya di dalam aplikasi.</strong> Belum ada scheduler email atau push notification.
+                <strong>Pengingat dalam aplikasi selalu aktif.</strong> Pengingat email tersedia setelah layanan
+                pengirim email (Resend) dikonfigurasi; pengingat push belum tersedia.
               </li>
               <li>
                 <strong>Verifikasi pelajar memakai alur demo.</strong> Belum terhubung ke PDDikti atau penyedia

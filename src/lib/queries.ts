@@ -12,7 +12,15 @@ import { prisma } from './db';
 import { ApiError } from './api';
 import { isDemoBuild } from './demo/constants';
 import { demoStore } from './demo/dataset';
-import type { Subscription, Payment, Budget, ReminderSetting, Category, User } from '@prisma/client';
+import type {
+  Subscription,
+  Payment,
+  Budget,
+  ReminderSetting,
+  Category,
+  User,
+  ReminderLog,
+} from '@prisma/client';
 
 const demo = () => isDemoBuild();
 
@@ -119,6 +127,16 @@ export async function getReminderSettings(userId: string): Promise<ReminderSetti
   const existing = await prisma.reminderSetting.findUnique({ where: { userId } });
   if (existing) return existing;
   return prisma.reminderSetting.create({ data: { userId, defaultDaysBefore: 3, inAppEnabled: true } });
+}
+
+/** Riwayat pengingat terakhir milik pengguna (untuk ditampilkan di UI). */
+export async function getRecentReminderLogs(userId: string, limit = 8): Promise<ReminderLog[]> {
+  if (demo()) return [];
+  return prisma.reminderLog.findMany({
+    where: { userId },
+    orderBy: { createdAt: 'desc' },
+    take: limit,
+  });
 }
 
 export async function getUserById(userId: string): Promise<User> {
