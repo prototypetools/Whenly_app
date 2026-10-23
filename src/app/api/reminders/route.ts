@@ -5,6 +5,7 @@ import { getReminderSettings } from '@/lib/queries';
 import { reminderSettingsSchema } from '@/lib/validation';
 import { ApiError } from '@/lib/api';
 import { isEmailConfigured, EMAIL_FROM } from '@/lib/email';
+import { isPushConfigured } from '@/lib/push';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -20,6 +21,7 @@ export async function GET() {
     const user = await requireApiUser();
     const settings = await getReminderSettings(user.id);
     const emailReady = isEmailConfigured();
+    const pushReady = isPushConfigured();
     return jsonOk({
       settings,
       channels: {
@@ -30,7 +32,12 @@ export async function GET() {
             ? `Aktif. Email dikirim dari ${EMAIL_FROM} pada H-${settings.defaultDaysBefore}, H-1, dan hari-H.`
             : 'Belum dikonfigurasi: isi RESEND_API_KEY (dan opsional REMINDER_FROM_EMAIL) di environment.',
         },
-        push: { available: false, note: 'Belum tersedia: membutuhkan izin browser dan layanan push.' },
+        push: {
+          available: pushReady,
+          note: pushReady
+            ? 'Aktif. Buka halaman Renewal lalu klik "Aktifkan notifikasi" di perangkat yang ingin menerima pengingat.'
+            : 'Belum dikonfigurasi: isi VAPID_PUBLIC_KEY dan VAPID_PRIVATE_KEY di environment.',
+        },
       },
     });
   } catch (error) {

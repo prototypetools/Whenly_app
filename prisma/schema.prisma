@@ -51,6 +51,7 @@ model User {
   sessions             Session[]
   categories           Category[]
   reminderLogs         ReminderLog[]
+  pushSubscriptions    PushSubscription[]
 
   @@index([planId])
 }
@@ -278,5 +279,22 @@ model ReminderLog {
   @@index([userId, createdAt])
   @@index([subscriptionId, kind, dueDate, daysBefore])
   @@index([status, createdAt])
+}
+
+// Perangkat yang mengizinkan notifikasi push (browser/HP).
+// Satu pengguna bisa punya banyak perangkat; satu endpoint unik per perangkat.
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userAgent String?
+  createdAt DateTime @default(now())
+  lastUsedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 

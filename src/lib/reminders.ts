@@ -4,29 +4,42 @@
  * ============================================================
  * Dipanggil oleh cron harian (`/api/cron/reminders`).
  *
+ * Kanal yang didukung:
+ *  - EMAIL  → aktif bila pengguna menyalakan `emailEnabled` dan
+ *             RESEND_API_KEY tersedia.
+ *  - PUSH   → aktif otomatis bila pengguna sudah mengizinkan notifikasi
+ *             di perangkat (ada baris di `PushSubscription`).
+ *
  * Aturan pengiriman:
- *  - Hanya untuk pengguna yang mengaktifkan `emailEnabled`.
  *  - Dikirim pada ambang: `defaultDaysBefore` milik pengguna, H-1, dan H-0.
- *  - Satu email per kombinasi (langganan + jenis + tanggal jatuh tempo + H-).
- *    Pengecekan memakai tabel `ReminderLog`, jadi cron boleh dijalankan
- *    berkali-kali tanpa membuat email dobel.
+ *  - Satu pesan per kombinasi (langganan + jenis + tanggal + H- + kanal).
+ *    Pengecekan memakai `ReminderLog`, jadi cron boleh dijalankan berkali-kali
+ *    tanpa membuat notifikasi dobel.
  *
  * Pengingat uji coba (trial) memakai `trialEndDate` sebagai tanggal acuan.
  */
 
 import { prisma } from './db';
 import { isDemoBuild } from './demo/constants';
-import { daysFromToday, formatDateID, toISODate, todayISO, addDaysISO } from './dates';
+import { addDaysISO, daysFromToday, formatDateID, toISODate, todayISO } from './dates';
 import { sendEmail, buildReminderEmail, appUrl, isEmailConfigured } from './email';
+import { formatIDR } from './money';
+import {
+  buildRenewalPush,
+  isPushConfigured,
+  sendPushToSubscriptions,
+} from './push';
 
 export const REMINDER_CHANNEL = 'email';
 
 export type ReminderKind = 'due' | 'trial' | 'test';
+export type ReminderChannel = 'email' | 'push';
 
 export interface ReminderRunItem {
   subscriptionId: string;
   subscriptionName: string;
   kind: ReminderKind;
+  channel: ReminderChannel;
   dueDate: string;
   daysBefore: number;
   status: 'sent' | 'skipped' | 'failed' | 'already-sent';
@@ -38,6 +51,7 @@ export interface ReminderRunSummary {
   disabled?: boolean;
   reason?: string;
   emailConfigured: boolean;
+  pushConfigured: boolean;
   today: string;
   scanned: number;
   sent: number;
@@ -66,11 +80,31 @@ function thresholdsFor(defaultDaysBefore: number): number[] {
 export interface RunReminderOptions {
   /** Tanggal acuan (YYYY-MM-DD). Default: hari ini. */
   today?: string;
-  /** true = hanya menghitung, tidak mengirim email & tidak menulis log. */
+  /** true = hanya menghitung, tidak mengirim & tidak menulis log. */
   dryRun?: boolean;
   /** Batasi ke satu pengguna (dipakai untuk pengujian). */
   userId?: string;
 }
+
+type SubscriptionWithUser = {
+  id: string;
+  userId: string;
+  name: string;
+  price: number;
+  isFreeTrial: boolean;
+  priceAfterTrial: number | null;
+  nextRenewalDate: Date;
+  trialEndDate: Date | null;
+  paidThisCycle: boolean;
+  lastPaidAt: Date | null;
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    reminderSetting: { emailEnabled: boolean; defaultDaysBefore: number } | null;
+    pushSubscriptions: { id: string; endpoint: string; p256dh: string; auth: string }[];
+  };
+};
 
 /**
  * Menjalankan pemindaian pengingat.
@@ -81,6 +115,7 @@ export async function runReminderScan(options: RunReminderOptions = {}): Promise
   const base: ReminderRunSummary = {
     ok: true,
     emailConfigured: isEmailConfigured(),
+    pushConfigured: isPushConfigured(),
     today,
     scanned: 0,
     sent: 0,
@@ -94,9 +129,8 @@ export async function runReminderScan(options: RunReminderOptions = {}): Promise
     return { ...base, ok: false, disabled: true, reason: 'Mode demo tidak memakai database.' };
   }
 
-  // Cari langganan yang tanggal renewal-nya berada dalam jendela pengingat.
   const windowEnd = addDaysISO(today, 60);
-  const subscriptions = await prisma.subscription.findMany({
+  const subscriptions = (await prisma.subscription.findMany({
     where: {
       status: 'active',
       nextRenewalDate: {
@@ -106,60 +140,82 @@ export async function runReminderScan(options: RunReminderOptions = {}): Promise
       ...(options.userId ? { userId: options.userId } : {}),
     },
     include: {
-      user: { include: { reminderSetting: true } },
+      user: {
+        include: {
+          reminderSetting: true,
+          pushSubscriptions: { select: { id: true, endpoint: true, p256dh: true, auth: true } },
+        },
+      },
     },
     orderBy: { nextRenewalDate: 'asc' },
-  });
+  })) as unknown as SubscriptionWithUser[];
 
   for (const sub of subscriptions) {
-    const settings = sub.user.reminderSetting;
-    if (!settings?.emailEnabled) continue;
     if (sub.paidThisCycle) continue;
 
-    const thresholds = thresholdsFor(settings.defaultDaysBefore);
+    const settings = sub.user.reminderSetting;
+    const thresholds = thresholdsFor(settings?.defaultDaysBefore ?? 3);
     const maxDays = thresholds[0] ?? 0;
+    const amount = amountFor(sub);
 
-    // ---- Pengingat tagihan normal ----
     const dueISO = toISODate(sub.nextRenewalDate);
     const dueIn = daysFromToday(dueISO, today);
     const trialISO = sub.isFreeTrial && sub.trialEndDate ? toISODate(sub.trialEndDate) : null;
+    const trialIn = trialISO ? daysFromToday(trialISO, today) : -1;
 
     // Bila tanggal trial dan tanggal tagihan sama, cukup kirim email trial
-    // supaya pengguna tidak menerima dua email untuk satu kejadian.
-    if (trialISO !== dueISO && dueIn >= 0 && dueIn <= maxDays && thresholds.includes(dueIn) && amountFor(sub) > 0) {
+    // supaya pengguna tidak menerima dua notifikasi untuk satu kejadian.
+    const dueMatches =
+      trialISO !== dueISO &&
+      dueIn >= 0 &&
+      dueIn <= maxDays &&
+      thresholds.includes(dueIn) &&
+      amount > 0;
+
+    const trialMatches = Boolean(
+      sub.isFreeTrial &&
+        trialISO &&
+        trialIn >= 0 &&
+        trialIn <= maxDays &&
+        thresholds.includes(trialIn),
+    );
+
+    if (!dueMatches && !trialMatches) continue;
+
+    const channels: ReminderChannel[] = [];
+    if (settings?.emailEnabled) channels.push('email');
+    if (isPushConfigured() && sub.user.pushSubscriptions.length > 0) channels.push('push');
+
+    if (dueMatches) {
       base.scanned += 1;
-      const result = await deliverReminder({
-        userId: sub.userId,
-        subscriptionId: sub.id,
-        subscriptionName: sub.name,
-        toEmail: sub.user.email,
-        userName: sub.user.name,
-        kind: 'due',
-        dueDateISO: dueISO,
-        daysBefore: dueIn,
-        amount: amountFor(sub),
-        isTrial: false,
-        isFirstCharge: !sub.lastPaidAt,
-        dryRun: Boolean(options.dryRun),
-      });
-      mergeResult(base, result);
+      for (const channel of channels) {
+        const result = await deliver({
+          channel,
+          userId: sub.userId,
+          subscription: sub,
+          kind: 'due',
+          dueDateISO: dueISO,
+          daysBefore: dueIn,
+          amount,
+          isTrial: false,
+          isFirstCharge: !sub.lastPaidAt,
+          dryRun: Boolean(options.dryRun),
+        });
+        mergeResult(base, result);
+      }
     }
 
-    // ---- Pengingat akhir masa uji coba ----
-    if (sub.isFreeTrial && trialISO) {
-      const trialIn = daysFromToday(trialISO, today);
-      if (trialIn >= 0 && trialIn <= maxDays && thresholds.includes(trialIn)) {
-        base.scanned += 1;
-        const result = await deliverReminder({
+    if (trialMatches && trialISO) {
+      base.scanned += 1;
+      for (const channel of channels) {
+        const result = await deliver({
+          channel,
           userId: sub.userId,
-          subscriptionId: sub.id,
-          subscriptionName: sub.name,
-          toEmail: sub.user.email,
-          userName: sub.user.name,
+          subscription: sub,
           kind: 'trial',
           dueDateISO: trialISO,
           daysBefore: trialIn,
-          amount: amountFor(sub),
+          amount,
           isTrial: true,
           isFirstCharge: false,
           dryRun: Boolean(options.dryRun),
@@ -181,11 +237,9 @@ function mergeResult(summary: ReminderRunSummary, result: ReminderRunItem): void
 }
 
 interface DeliverInput {
+  channel: ReminderChannel;
   userId: string;
-  subscriptionId: string;
-  subscriptionName: string;
-  toEmail: string;
-  userName: string;
+  subscription: SubscriptionWithUser;
   kind: ReminderKind;
   dueDateISO: string;
   daysBefore: number;
@@ -195,14 +249,24 @@ interface DeliverInput {
   dryRun: boolean;
 }
 
-async function deliverReminder(input: DeliverInput): Promise<ReminderRunItem> {
+async function deliver(input: DeliverInput): Promise<ReminderRunItem> {
   const dueDate = new Date(`${input.dueDateISO}T00:00:00.000Z`);
+  const item: ReminderRunItem = {
+    subscriptionId: input.subscription.id,
+    subscriptionName: input.subscription.name,
+    kind: input.kind,
+    channel: input.channel,
+    dueDate: input.dueDateISO,
+    daysBefore: input.daysBefore,
+    status: 'skipped',
+  };
 
-  // ---- Anti-duplikat ----
+  // ---- Anti-duplikat per kanal ----
   const existing = await prisma.reminderLog.findFirst({
     where: {
-      subscriptionId: input.subscriptionId,
+      subscriptionId: input.subscription.id,
       kind: input.kind,
+      channel: input.channel,
       dueDate,
       daysBefore: input.daysBefore,
       status: { in: ['sent', 'skipped'] },
@@ -210,73 +274,73 @@ async function deliverReminder(input: DeliverInput): Promise<ReminderRunItem> {
     select: { id: true },
   });
 
-  if (existing) {
-    return {
-      subscriptionId: input.subscriptionId,
-      subscriptionName: input.subscriptionName,
-      kind: input.kind,
-      dueDate: input.dueDateISO,
-      daysBefore: input.daysBefore,
-      status: 'already-sent',
-    };
-  }
+  if (existing) return { ...item, status: 'already-sent' };
 
   if (input.dryRun) {
-    return {
-      subscriptionId: input.subscriptionId,
-      subscriptionName: input.subscriptionName,
-      kind: input.kind,
-      dueDate: input.dueDateISO,
-      daysBefore: input.daysBefore,
-      status: 'skipped',
-      error: 'Dry run: email tidak dikirim.',
-    };
+    return { ...item, status: 'skipped', error: 'Dry run: pesan tidak dikirim.' };
   }
 
-  const email = buildReminderEmail({
-    userName: input.userName,
-    subscriptionName: input.subscriptionName,
-    amount: input.amount,
-    dueDateISO: input.dueDateISO,
-    daysLeft: input.daysBefore,
-    isTrial: input.isTrial,
-    isFirstCharge: input.isFirstCharge,
-    url: appUrl(),
-  });
+  let status: 'sent' | 'skipped' | 'failed' = 'skipped';
+  let providerRef: string | null = null;
+  let error: string | null = null;
+  let toEmail: string | null = null;
 
-  const result = await sendEmail({
-    to: input.toEmail,
-    subject: email.subject,
-    html: email.html,
-    text: email.text,
-  });
+  if (input.channel === 'email') {
+    toEmail = input.subscription.user.email;
+    const email = buildReminderEmail({
+      userName: input.subscription.user.name,
+      subscriptionName: input.subscription.name,
+      amount: input.amount,
+      dueDateISO: input.dueDateISO,
+      daysLeft: input.daysBefore,
+      isTrial: input.isTrial,
+      isFirstCharge: input.isFirstCharge,
+      url: appUrl(),
+    });
+    const result = await sendEmail({
+      to: toEmail,
+      subject: email.subject,
+      html: email.html,
+      text: email.text,
+    });
+    status = result.status;
+    providerRef = result.providerRef ?? null;
+    error = result.error ?? null;
+  } else {
+    const push = buildRenewalPush({
+      subscriptionName: input.subscription.name,
+      amountLabel: formatIDR(input.amount),
+      dueLabel: formatDateID(input.dueDateISO),
+      daysLeft: input.daysBefore,
+      isTrial: input.isTrial,
+      subscriptionId: input.subscription.id,
+      dueISO: input.dueDateISO,
+      baseUrl: appUrl(),
+    });
+    const result = await sendPushToSubscriptions(input.subscription.user.pushSubscriptions, push);
+    if (result.sent > 0) status = 'sent';
+    else status = 'failed';
+    error = result.sent > 0 ? null : 'Tidak ada notifikasi yang berhasil terkirim.';
+  }
 
   await prisma.reminderLog.create({
     data: {
       userId: input.userId,
-      subscriptionId: input.subscriptionId,
-      subscriptionName: input.subscriptionName,
-      channel: REMINDER_CHANNEL,
+      subscriptionId: input.subscription.id,
+      subscriptionName: input.subscription.name,
+      channel: input.channel,
       kind: input.kind,
       dueDate,
       daysBefore: input.daysBefore,
-      status: result.status,
-      provider: 'resend',
-      providerRef: result.providerRef ?? null,
-      toEmail: input.toEmail,
-      error: result.error ?? null,
+      status,
+      provider: input.channel === 'email' ? 'resend' : 'web-push',
+      providerRef,
+      toEmail,
+      error,
     },
   });
 
-  return {
-    subscriptionId: input.subscriptionId,
-    subscriptionName: input.subscriptionName,
-    kind: input.kind,
-    dueDate: input.dueDateISO,
-    daysBefore: input.daysBefore,
-    status: result.status,
-    error: result.error,
-  };
+  return { ...item, status, error: error ?? undefined };
 }
 
 /**
@@ -307,7 +371,7 @@ export async function sendTestReminder(user: {
       userId: user.id,
       subscriptionId: null,
       subscriptionName: 'Email uji coba',
-      channel: REMINDER_CHANNEL,
+      channel: 'email',
       kind: 'test',
       status: result.status,
       provider: 'resend',

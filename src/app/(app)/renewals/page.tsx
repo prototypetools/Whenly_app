@@ -13,6 +13,7 @@ import { Badge, Card, CardHeader, EmptyState, InfoBanner, PageHeader, StatCard }
 import { MarkPaidButton } from '@/components/subscriptions/SubscriptionActions';
 import { RenewalCalendar, type CalendarCharge } from '@/components/renewals/RenewalCalendar';
 import { ReminderSettingsForm } from '@/components/forms/ReminderSettingsForm';
+import { PushSettings } from '@/components/notifications/PushSettings';
 import { isEmailConfigured } from '@/lib/email';
 
 export const metadata: Metadata = { title: 'Renewal & Reminder' };
@@ -35,6 +36,7 @@ export default async function RenewalsPage() {
     getReminderSettings(user.id),
   ]);
   const reminderLogs = await getRecentReminderLogs(user.id);
+  const emailReady = isEmailConfigured();
 
   const entitlements = await getEntitlements(user.id, user.planId, {
     planExpiresAt: user.planExpiresAt,
@@ -91,11 +93,13 @@ export default async function RenewalsPage() {
         }
       />
 
-      <InfoBanner tone="warn" title="Pengingat hanya berjalan di dalam aplikasi">
-        Whenly <strong>tidak</strong> mengirim email, WhatsApp, atau push notification karena belum ada layanan
-        notifikasi dan scheduler yang terintegrasi pada prototype ini. Agar janji ini tidak palsu, opsi email sengaja
-        dinonaktifkan (bukan disimulasikan) — silakan periksa dashboard secara berkala atau atur sendiri pengingat di
-        kalender ponselmu.
+      <InfoBanner tone="info" title="Pengingat berlapis: aplikasi, perangkat, dan email">
+        Saat kamu membuka aplikasi, Whenly menampilkan pop-up untuk tagihan yang mendekat. Aktifkan{' '}
+        <strong>notifikasi perangkat</strong> di panel bawah agar pengingat tetap muncul walau aplikasi ditutup,
+        tanpa layanan pihak ketiga. Pengingat <strong>email</strong>{' '}
+        {emailReady
+          ? 'sudah aktif dan dikirim pada H-3, H-1, dan hari-H.'
+          : 'belum aktif karena layanan email (Resend) belum dikonfigurasi di server.'}
       </InfoBanner>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -207,6 +211,8 @@ export default async function RenewalsPage() {
         isPremiumPlan={limits.advancedReminders}
         emailConfigured={isEmailConfigured()}
       />
+
+      <PushSettings />
 
       <Card>
         <CardHeader
