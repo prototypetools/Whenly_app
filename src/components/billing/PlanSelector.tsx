@@ -44,8 +44,11 @@ interface CheckoutState {
   planName: string;
   cycle: 'monthly' | 'yearly';
   amount: number;
+  provider: string;
   providerLabel: string;
   note: string;
+  redirectUrl?: string;
+  token?: string;
 }
 
 export function PlanSelector({
@@ -55,6 +58,7 @@ export function PlanSelector({
   sandbox,
   providerLabel,
   studentStatus,
+  billingReady,
 }: {
   plans: PlanCardData[];
   currentPlanId: string;
@@ -62,6 +66,7 @@ export function PlanSelector({
   sandbox: boolean;
   providerLabel: string;
   studentStatus: string;
+  billingReady: boolean;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -113,6 +118,13 @@ export function PlanSelector({
         planId: plan.id,
         cycle,
       });
+
+      // Midtrans Snap: arahkan ke halaman pembayaran milik Midtrans.
+      if (result.checkout.redirectUrl) {
+        window.location.assign(result.checkout.redirectUrl);
+        return;
+      }
+
       setCheckout(result.checkout);
     } catch (error) {
       if (error instanceof ApiClientError) {
@@ -208,11 +220,15 @@ export function PlanSelector({
         </p>
       </div>
 
-      {!sandbox ? (
-        <InfoBanner tone="danger" title={`Provider pembayaran aktif: ${providerLabel}`}>
-          Prototype ini belum memiliki integrasi webhook/kredensial untuk provider tersebut. Tombol berlangganan akan
-          ditolak server (501) sampai integrasi benar-benar selesai — ini disengaja agar tidak ada status pembayaran
-          palsu.
+      {!billingReady ? (
+        <InfoBanner tone="danger" title={`Provider pembayaran belum siap: ${providerLabel}`}>
+          Kredensial provider belum diisi di server. Checkout akan ditolak dengan pesan jelas sampai kredensial
+          dikonfigurasi - tidak ada status pembayaran palsu.
+        </InfoBanner>
+      ) : !sandbox ? (
+        <InfoBanner tone="success" title={`Pembayaran aktif: ${providerLabel}`}>
+          Kamu akan diarahkan ke halaman pembayaran Midtrans. Paket aktif otomatis setelah pembayaran terverifikasi
+          lewat webhook, biasanya dalam beberapa detik.
         </InfoBanner>
       ) : null}
 
@@ -427,10 +443,17 @@ export function PlanSelector({
               </InfoBanner>
             ) : null}
 
-            <InfoBanner tone="warn" title="Pembayaran sandbox">
-              Belum ada payment gateway terintegrasi ({providerLabel}). Kamu akan diminta menekan tombol &ldquo;Simulasikan
-              pembayaran berhasil&rdquo; dan statusnya ditandai demo — tidak ada uang yang berpindah.
-            </InfoBanner>
+            {sandbox ? (
+              <InfoBanner tone="warn" title="Pembayaran sandbox">
+                Provider yang aktif adalah {providerLabel}. Kamu akan menekan tombol simulasi dan statusnya ditandai
+                demo - tidak ada uang yang berpindah.
+              </InfoBanner>
+            ) : (
+              <InfoBanner tone="success" title="Pembayaran aman via Midtrans">
+                Setelah menekan lanjut, kamu akan diarahkan ke halaman Midtrans untuk memilih metode pembayaran. Whenly
+                tidak menerima atau menyimpan nomor kartu/rekening.
+              </InfoBanner>
+            )}
           </div>
         ) : null}
       </Modal>

@@ -50,15 +50,22 @@ export default async function BillingPage() {
       />
 
       {/* ---- Peringatan sandbox ---- */}
-      {overview.sandbox ? (
-        <InfoBanner tone="warn" title="Mode sandbox — tidak ada pembayaran nyata">
-          Semua status di halaman ini berasal dari simulasi internal ({overview.providerLabel}). Tidak ada transaksi,
-          tidak ada data kartu/rekening, dan tidak ada uang yang berpindah. Status pembayaran ditampilkan sebagai{' '}
-          <strong>Sandbox (demo)</strong> dan tidak pernah diklaim sebagai pembayaran berhasil.
+            {!overview.paymentReady ? (
+        <InfoBanner tone="danger" title={`Provider pembayaran belum siap: ${overview.providerLabel}`}>
+          Checkout akan ditolak dengan pesan jelas sampai kredensial provider diisi di server.
+        </InfoBanner>
+      ) : overview.provider === 'midtrans' ? (
+        <InfoBanner tone="success" title={`Pembayaran diproses ${overview.providerLabel}`}>
+          Transaksi berjalan di halaman Midtrans. Paket aktif otomatis setelah webhook terverifikasi.
+          {overview.sandbox
+            ? ' Ini mode sandbox: gunakan data uji, tidak ada uang nyata yang berpindah.'
+            : ' Whenly tidak menyimpan nomor kartu atau rekening.'}
         </InfoBanner>
       ) : (
-        <InfoBanner tone="danger" title={`Provider nyata belum dikonfigurasi: ${overview.providerLabel}`}>
-          Server akan menolak checkout hingga integrasi provider beserta webhook-nya selesai dipasang.
+        <InfoBanner tone="warn" title="Mode sandbox - tidak ada pembayaran nyata">
+          Semua status di halaman ini berasal dari simulasi internal ({overview.providerLabel}). Tidak ada transaksi,
+          tidak ada data kartu/rekening, dan tidak ada uang yang berpindah. Status pembayaran ditandai
+          <strong> Sandbox (demo)</strong>.
         </InfoBanner>
       )}
 
@@ -112,7 +119,9 @@ export default async function BillingPage() {
             cancelAtPeriodEnd={overview.cancelAtPeriodEnd}
             expiresAtLabel={expiresAtLabel}
             sandbox={overview.sandbox}
-          />
+            paymentReady={overview.paymentReady}
+            provider={overview.provider}
+            />
         </div>
       </Card>
 

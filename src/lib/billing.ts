@@ -22,6 +22,14 @@ import { addMonthsClamped, todayISO, toISODate } from './dates';
 import { isDemoBuild } from './demo/constants';
 import { demoStore } from './demo/dataset';
 import type { SessionUser } from './auth';
+import {
+  createSnapTransaction,
+  isMidtransConfigured,
+  isMidtransProduction,
+  mapMidtransStatus,
+  midtransModeLabel,
+  verifyMidtransSignature,
+} from './midtrans';
 
 export const BILLING_PROVIDER = process.env.BILLING_PROVIDER || 'mock';
 
@@ -35,20 +43,33 @@ export function isMockBilling(): boolean {
   return BILLING_PROVIDER === 'mock';
 }
 
+export function isMidtransBilling(): boolean {
+  return BILLING_PROVIDER === 'midtrans';
+}
+
 export function providerLabel(): string {
+  if (isMidtransBilling()) return midtransModeLabel();
   return BILLING_PROVIDER_LABEL[BILLING_PROVIDER] ?? BILLING_PROVIDER;
 }
 
+/** true bila provider aktif sudah benar-benar siap dipakai. */
+export function isBillingReady(): boolean {
+  if (isMockBilling()) return true;
+  if (isMidtransBilling()) return isMidtransConfigured();
+  return false;
+}
+
 function assertProviderConfigured(): void {
-  if (!isMockBilling()) {
-    throw new ApiError(
-      501,
-      'BILLING_NOT_CONFIGURED',
-      `Provider pembayaran "${BILLING_PROVIDER}" belum dikonfigurasi pada prototype ini. ` +
-        'Isi kredensial provider di environment server dan implementasikan webhook-nya terlebih dahulu.',
-      { provider: BILLING_PROVIDER },
-    );
-  }
+  if (isMockBilling()) return;
+  if (isMidtransBilling() && isMidtransConfigured()) return;
+
+  throw new ApiError(
+    501,
+    'BILLING_NOT_CONFIGURED',
+    `Provider pembayaran "${BILLING_PROVIDER}" belum dikonfigurasi. ` +
+      'Isi kredensial provider di environment server (untuk Midtrans: MIDTRANS_SERVER_KEY).',
+    { provider: BILLING_PROVIDER },
+  );
 }
 
 /** Menambahkan satu periode penagihan ke sebuah tanggal. */
@@ -65,9 +86,13 @@ export interface CheckoutSession {
   provider: string;
   providerLabel: string;
   status: 'pending';
-  /** Selalu true pada prototype ini: pembayaran disimulasikan. */
+  /** true bila transaksi berjalan di mode uji (tidak memindahkan uang nyata). */
   sandbox: boolean;
   note: string;
+  /** Khusus Midtrans: URL halaman pembayaran. */
+  redirectUrl?: string;
+  /** Khusus Midtrans: token Snap (untuk snap.js bila ingin popup). */
+  token?: string;
 }
 
 const SANDBOX_NOTE =
@@ -84,6 +109,14 @@ export async function createCheckout(
   cycle: BillingCycle,
 ): Promise<CheckoutSession> {
   assertProviderConfigured();
+
+  if (isDemoBuild() && !isMockBilling()) {
+    throw new ApiError(
+      503,
+      'DEMO_MODE_LIMITATION',
+      'Mode demo (tanpa database) hanya mendukung BILLING_PROVIDER=mock.',
+    );
+  }
 
   const plan = getPlan(planId);
   const amount = planPrice(plan.id, cycle);
@@ -120,6 +153,91 @@ export async function createCheckout(
       sandbox: true,
       note: SANDBOX_NOTE,
     };
+  }
+
+  if (isMidtransBilling()) {
+    if (!isMidtransConfigured()) {
+      throw new ApiError(
+        503,
+        'MIDTRANS_NOT_CONFIGURED',
+        'Midtrans dipilih sebagai provider, tetapi MIDTRANS_SERVER_KEY belum diisi di environment.',
+      );
+    }
+
+    const customer = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { name: true, email: true },
+    });
+    if (!customer) throw new ApiError(404, 'USER_NOT_FOUND', 'Pengguna tidak ditemukan.');
+
+    const baseUrl = (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+    const event = await prisma.billingEvent.create({
+      data: {
+        userId,
+        type: 'plan_selected',
+        planId: plan.id,
+        cycle,
+        amount,
+        status: 'pending',
+        provider: 'midtrans',
+        note: 'Menunggu pembayaran melalui Midtrans Snap.',
+      },
+    });
+
+    try {
+      const snap = await createSnapTransaction({
+        orderId: event.id,
+        amount,
+        items: [
+          {
+            id: `${plan.id}-${cycle}`,
+            name: `${plan.name} ${cycle === 'yearly' ? 'tahunan' : 'bulanan'}`.slice(0, 50),
+            price: amount,
+            quantity: 1,
+          },
+        ],
+        customer,
+        finishUrl: `${baseUrl}/billing?status=finish&order=${event.id}`,
+      });
+
+      await prisma.billingEvent.update({
+        where: { id: event.id },
+        data: {
+          providerRef: snap.token,
+          note: 'Transaksi Midtrans dibuat; menunggu pembayaran.',
+        },
+      });
+
+      return {
+        checkoutId: event.id,
+        planId: plan.id,
+        planName: plan.name,
+        cycle,
+        amount,
+        provider: 'midtrans',
+        providerLabel: providerLabel(),
+        status: 'pending',
+        sandbox: !isMidtransProduction(),
+        note: isMidtransProduction()
+          ? 'Pembayaran diproses oleh Midtrans. Paket aktif setelah pembayaran terverifikasi.'
+          : 'Mode sandbox Midtrans: gunakan kartu/kode uji, tidak ada uang nyata yang berpindah.',
+        redirectUrl: snap.redirectUrl,
+        token: snap.token,
+      };
+    } catch (error) {
+      await prisma.billingEvent.update({
+        where: { id: event.id },
+        data: {
+          status: 'failed',
+          note: `Gagal membuat transaksi Midtrans: ${(error as Error).message}`.slice(0, 500),
+        },
+      });
+      throw new ApiError(
+        502,
+        'MIDTRANS_CREATE_FAILED',
+        'Gagal membuat transaksi pembayaran. Periksa kredensial Midtrans lalu coba lagi.',
+      );
+    }
   }
 
   const event = await prisma.billingEvent.create({
@@ -164,6 +282,14 @@ export interface ActivatedPlan {
  */
 export async function confirmCheckout(userId: string, checkoutId: string): Promise<ActivatedPlan> {
   assertProviderConfigured();
+
+  if (isMidtransBilling()) {
+    throw new ApiError(
+      400,
+      'CONFIRM_NOT_ALLOWED',
+      'Pembayaran Midtrans tidak bisa dikonfirmasi manual. Paket aktif otomatis setelah webhook Midtrans terverifikasi.',
+    );
+  }
 
   if (isDemoBuild()) {
     const event = demoStore.billingEvents.find(
@@ -608,7 +734,10 @@ export interface BillingOverview {
   paymentStatus: string;
   provider: string;
   providerLabel: string;
+  /** true bila pembayaran masih simulasi (mock / Midtrans sandbox). */
   sandbox: boolean;
+  /** true bila provider benar-benar siap menerima transaksi. */
+  paymentReady: boolean;
   memberships: {
     id: string;
     planId: string;
@@ -738,7 +867,8 @@ export async function getBillingOverview(user: SessionUser): Promise<BillingOver
     paymentStatus: user.paymentStatus,
     provider: BILLING_PROVIDER,
     providerLabel: providerLabel(),
-    sandbox: isMockBilling(),
+    sandbox: isMockBilling() || (isMidtransBilling() && !isMidtransProduction()),
+    paymentReady: isBillingReady(),
     memberships: memberships.map((m) => ({
       id: m.id,
       planId: m.planId,
@@ -765,6 +895,183 @@ export async function getBillingOverview(user: SessionUser): Promise<BillingOver
       createdAt: e.createdAt,
     })),
   };
+}
+
+export interface MidtransNotification {
+  order_id: string;
+  status_code: string;
+  gross_amount: string;
+  signature_key: string;
+  transaction_status: string;
+  fraud_status?: string;
+  transaction_id?: string;
+  payment_type?: string;
+}
+
+export interface MidtransHandleResult {
+  handled: boolean;
+  outcome: string;
+  planId?: string;
+  alreadyProcessed?: boolean;
+  reason?: string;
+}
+
+/**
+ * Menangani webhook Midtrans secara idempotent.
+ *
+ * Keamanan:
+ *  - Signature SHA512 diverifikasi dengan server key.
+ *  - Nominal harus sama dengan yang tercatat saat checkout.
+ *
+ * Idempotensi:
+ *  - Perubahan status dilakukan lewat `updateMany` dengan syarat status
+ *    masih `pending`, jadi webhook yang dikirim ulang tidak menggandakan
+ *    keanggotaan atau memperpanjang masa aktif dua kali.
+ */
+export async function handleMidtransNotification(
+  payload: MidtransNotification,
+): Promise<MidtransHandleResult> {
+  if (!isMidtransBilling() || !isMidtransConfigured()) {
+    return { handled: false, outcome: 'ignored', reason: 'Midtrans tidak aktif di server ini.' };
+  }
+
+  const valid = verifyMidtransSignature({
+    orderId: payload.order_id,
+    statusCode: payload.status_code,
+    grossAmount: payload.gross_amount,
+    signatureKey: payload.signature_key,
+  });
+  if (!valid) {
+    throw new ApiError(401, 'INVALID_SIGNATURE', 'Signature webhook Midtrans tidak valid.');
+  }
+
+  const event = await prisma.billingEvent.findUnique({ where: { id: payload.order_id } });
+  if (!event) {
+    return { handled: false, outcome: 'ignored', reason: 'Order tidak dikenal.' };
+  }
+
+  if (Math.round(Number(payload.gross_amount)) !== event.amount) {
+    throw new ApiError(400, 'AMOUNT_MISMATCH', 'Nominal pembayaran tidak sesuai dengan tagihan.');
+  }
+
+  const outcome = mapMidtransStatus(payload.transaction_status, payload.fraud_status);
+
+  if (outcome === 'paid') {
+    const activated = await activateMidtransEvent(event.id, payload.transaction_id ?? event.providerRef ?? '-');
+    return {
+      handled: true,
+      outcome,
+      planId: event.planId ?? undefined,
+      alreadyProcessed: !activated,
+    };
+  }
+
+  if (outcome === 'failed') {
+    await prisma.billingEvent.updateMany({
+      where: { id: event.id, status: 'pending' },
+      data: {
+        status: 'failed',
+        note: `Pembayaran ${payload.transaction_status}. Ref: ${payload.transaction_id ?? '-'}`.slice(0, 500),
+      },
+    });
+    return { handled: true, outcome };
+  }
+
+  if (outcome === 'refunded') {
+    await prisma.billingEvent.updateMany({
+      where: { id: event.id },
+      data: {
+        status: 'refunded',
+        note: `Dana dikembalikan (${payload.transaction_status}). Ref: ${payload.transaction_id ?? '-'}`.slice(0, 500),
+      },
+    });
+    return { handled: true, outcome };
+  }
+
+  if (outcome === 'pending') {
+    await prisma.billingEvent.updateMany({
+      where: { id: event.id, status: 'pending' },
+      data: {
+        note: `Menunggu pembayaran (${payload.payment_type ?? 'metode belum dipilih'}).`.slice(0, 500),
+      },
+    });
+    return { handled: true, outcome };
+  }
+
+  return { handled: true, outcome: 'ignored' };
+}
+
+/** Mengaktifkan paket setelah pembayaran Midtrans terverifikasi. */
+async function activateMidtransEvent(orderId: string, transactionId: string): Promise<boolean> {
+  const event = await prisma.billingEvent.findUnique({ where: { id: orderId } });
+  if (!event || !event.planId) return false;
+  if (event.status === 'paid') return false;
+
+  const cycle = (event.cycle as BillingCycle) ?? 'monthly';
+  const plan = getPlan(event.planId);
+  const amount = event.amount;
+  const periodEndISO = addBillingCycle(todayISO(), cycle);
+  const periodEnd = new Date(`${periodEndISO}T00:00:00.000Z`);
+
+  return prisma.$transaction(async (tx) => {
+    const claimed = await tx.billingEvent.updateMany({
+      where: { id: event.id, status: { in: ['pending', 'failed'] } },
+      data: {
+        status: 'paid',
+        providerRef: transactionId,
+        note: `Pembayaran terverifikasi Midtrans. Ref: ${transactionId}`,
+      },
+    });
+
+    if (claimed.count === 0) return false;
+
+    await tx.membership.updateMany({
+      where: { userId: event.userId, status: 'active' },
+      data: { status: 'expired', canceledAt: new Date(), note: 'Digantikan oleh paket baru.' },
+    });
+
+    await tx.membership.create({
+      data: {
+        userId: event.userId,
+        planId: plan.id,
+        status: 'active',
+        cycle,
+        pricePaid: amount,
+        paymentStatus: 'paid',
+        startedAt: new Date(),
+        currentPeriodEnd: periodEnd,
+        note: `Pembayaran Midtrans (${transactionId}).`,
+      },
+    });
+
+    await tx.user.update({
+      where: { id: event.userId },
+      data: {
+        planId: plan.id,
+        planCycle: cycle,
+        planStartedAt: new Date(),
+        planExpiresAt: periodEnd,
+        cancelAtPeriodEnd: false,
+        paymentStatus: 'paid',
+      },
+    });
+
+    await tx.billingEvent.create({
+      data: {
+        userId: event.userId,
+        type: 'plan_activated',
+        planId: plan.id,
+        cycle,
+        amount,
+        status: 'paid',
+        provider: 'midtrans',
+        providerRef: transactionId,
+        note: `Paket ${plan.name} aktif hingga ${periodEndISO} setelah pembayaran Midtrans.`,
+      },
+    });
+
+    return true;
+  });
 }
 
 export const BILLING_EVENT_LABELS: Record<string, string> = {

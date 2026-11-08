@@ -3,7 +3,14 @@ import type { Metadata } from 'next';
 import { requireUser } from '@/lib/auth';
 import { getEntitlements } from '@/lib/plans';
 import { getStudentVerification } from '@/lib/queries';
-import { BILLING_PROVIDER_LABEL, isMockBilling, providerLabel, BILLING_PROVIDER } from '@/lib/billing';
+import {
+  BILLING_PROVIDER_LABEL,
+  isBillingReady,
+  isMidtransBilling,
+  isMockBilling,
+  providerLabel,
+  BILLING_PROVIDER,
+} from '@/lib/billing';
 import { COMPARISON_ROWS, PLANS, yearlySavings, type PlanId } from '@/config/plans';
 import { formatDateID, todayISO } from '@/lib/dates';
 import { formatIDR } from '@/lib/money';
@@ -33,6 +40,7 @@ export default async function PricingPage() {
 
   const studentStatus = verification?.status ?? user.studentStatus ?? 'none';
   const sandbox = isMockBilling();
+  const billingReady = isBillingReady();
   const today = todayISO();
 
   const planCards: PlanCardData[] = PLANS.slice()
@@ -135,13 +143,26 @@ export default async function PricingPage() {
         ) : null}
       </Card>
 
-      <InfoBanner tone="warn" title={`Pembayaran: ${providerLabel()} — belum ada gateway nyata`}>
-        Harga dan benefit di halaman ini sudah final untuk prototype, tetapi proses pembayaran masih berupa{' '}
-        <strong>sandbox/demo</strong> ({BILLING_PROVIDER_LABEL[BILLING_PROVIDER] ?? BILLING_PROVIDER}). Tidak ada uang
-        yang berpindah dan tidak ada data kartu/rekening yang diminta. Bila kamu mengubah <code>BILLING_PROVIDER</code>{' '}
-        ke provider nyata tanpa mengonfigurasinya, server akan menolak checkout (501) alih-alih menampilkan pembayaran
-        palsu.
-      </InfoBanner>
+            {billingReady ? (
+        <InfoBanner
+          tone={isMockBilling() ? 'warn' : 'success'}
+          title={
+            isMockBilling()
+              ? `Pembayaran: ${providerLabel()} - simulasi sandbox`
+              : `Pembayaran: ${providerLabel()} - siap`
+          }
+        >
+          {isMockBilling()
+            ? 'Mode sandbox internal: tidak ada uang yang berpindah dan tidak ada data kartu/rekening yang diminta. Status pembayaran ditandai demo.'
+            : 'Checkout diarahkan ke halaman pembayaran Midtrans (kartu, QRIS, GoPay, virtual account). Paket aktif otomatis setelah pembayaran terverifikasi lewat webhook - tidak ada aktivasi manual.'}
+        </InfoBanner>
+      ) : (
+        <InfoBanner tone="danger" title={`Pembayaran belum siap: ${providerLabel()}`}>
+          Provider <code>{BILLING_PROVIDER}</code> dipilih, tetapi kredensialnya belum diisi. Untuk Midtrans, isi{' '}
+          <code>MIDTRANS_SERVER_KEY</code> di environment lalu redeploy. Selama belum diisi, checkout ditolak dengan
+          pesan jelas (bukan pembayaran palsu).
+        </InfoBanner>
+      )}
 
       {/* ---- Kartu paket + alur checkout ---- */}
       <PlanSelector
@@ -149,6 +170,7 @@ export default async function PricingPage() {
         currentPlanId={user.planId}
         currentCycle={user.planCycle}
         sandbox={sandbox}
+        billingReady={billingReady}
         providerLabel={providerLabel()}
         studentStatus={STUDENT_STATUS_LABEL[studentStatus] ?? studentStatus}
       />

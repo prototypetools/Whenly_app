@@ -19,11 +19,15 @@ export function BillingActions({
   cancelAtPeriodEnd,
   expiresAtLabel,
   sandbox,
+  paymentReady,
+  provider,
 }: {
   planId: string;
   cancelAtPeriodEnd: boolean;
   expiresAtLabel: string | null;
   sandbox: boolean;
+  paymentReady: boolean;
+  provider: string;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -68,10 +72,16 @@ export function BillingActions({
 
   return (
     <div className="space-y-3">
-      {!sandbox ? (
+      {!paymentReady ? (
         <InfoBanner tone="danger" title="Provider pembayaran belum dikonfigurasi">
-          Perpanjangan otomatis tidak dapat dijalankan tanpa gateway nyata. Status pembayaran akan ditandai{' '}
+          Perpanjangan otomatis tidak dapat dijalankan tanpa kredensial gateway. Status pembayaran akan ditandai{' '}
           <em>menunggu konfirmasi</em>, bukan berhasil.
+        </InfoBanner>
+      ) : provider === 'midtrans' ? (
+        <InfoBanner tone="info" title="Perpanjangan belum otomatis">
+          Midtrans pada aplikasi ini memakai pembayaran satu kali per periode. Saat masa aktif berakhir, kamu perlu
+          membayar lagi lewat halaman Paket &amp; Harga. Tombol di bawah hanya mengatur niat perpanjangan, bukan
+          menagih otomatis.
         </InfoBanner>
       ) : null}
 
